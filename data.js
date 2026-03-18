@@ -156,7 +156,7 @@ const INITIAL_DATA = [
   {
     id: "d014", funcionario: "DAVISON",
     produto: "POCO X7 PRO 5G", qtd: 1,
-    valor: 3000.00, pagamento: "PARCELADO EM 12X",
+    valor: 3000.00, pagamento: "PARCELADO 12X",
     parcelas: [
       { mes: 3,  ano: 2026, label: "Mar/26", valor: 250.00, pago: true },
       { mes: 4,  ano: 2026, label: "Abr/26", valor: 250.00, pago: false },

@@ -7,19 +7,18 @@
 
 let db;
 let auth;
+let COLLECTION_REF;
 
 try {
   firebase.initializeApp(firebaseConfig);
   db = firebase.firestore();
   auth = firebase.auth();
+  COLLECTION_REF = db.collection('descontos');
 } catch (e) {
   console.error("Erro ao inicializar o Firebase. Verifique se o arquivo 'firebase-config.js' está correto e se as credenciais são válidas.", e);
   // Opcional: Mostrar um erro visível para o usuário na tela
   document.body.innerHTML = '<div style="text-align: center; padding: 40px; font-family: sans-serif; color: #d32f2f;"><h1>Erro de Configuração</h1><p>Não foi possível conectar ao Firebase. Verifique o console para mais detalhes e contate o administrador.</p></div>';
 }
-
-// Usando uma Coleção de Documentos ao invés de um documento único
-const COLLECTION_REF = db.collection('descontos');
 
 /**
  * Carrega os dados do Firestore.
@@ -91,7 +90,7 @@ async function fbGetAdminPassword() {
       // Retorna a senha, aceitando variações de maiúsculas/minúsculas caso tenha digitado diferente no Firebase
       return data.adminPassword || data.adminpassword || data.senha || null;
     }
-    return 'DOC_NOT_FOUND';
+    return null;
   } catch (err) {
     throw err;
   }

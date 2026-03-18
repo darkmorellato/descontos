@@ -392,18 +392,13 @@ function promptPagamento(descontoId, mes, ano) {
   const p = d?.parcelas.find(p => p.mes === mes && p.ano === ano);
   if (!p) return;
 
-  if (p.pago && !p.valorPago) {
+  if (p.pago) {
     promptResetParcela(descontoId, mes, ano);
     return;
   }
 
   const jaPago = getParcPago(p);
   const restante = p.valor - jaPago;
-
-  if (p.pago) {
-     promptResetParcela(descontoId, mes, ano);
-     return;
-  }
 
   const content = `
     <div class="modal-func-name" style="color:var(--green)">Registrar Pagamento</div>

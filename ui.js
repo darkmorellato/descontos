@@ -147,20 +147,16 @@ function renderDashboard() {
 // Exemplo: se a foto do Davison for JPG, coloque "davison.jpg". Se for PNG, "davison.png".
 const FUNC_PHOTOS = {
   "ANA REINA": "fotos/anareina.png",
-  "ANA CARVALHO": "fotos/Ana Carvalho.png",
   "BEATRIZ GOMES": "fotos/Bia Gomes.png",
-  "BIGODE": "fotos/Bigode.png",
+  "BIGODE": "fotos/bigode.png",
   "DAVISON": "fotos/Davison.png",
-  "DIOGO": "fotos/Diogo.png",
   "FABIANA": "fotos/Fabiana.png",
   "FILIPE": "fotos/Filipe.png",
   "KEMILYN": "fotos/Kemilly Giovana.png",
-  "PAULINHA": "fotos/Paulinha.png",
+  "PAULINHA": "fotos/paulinha.png",
   "POLLYANA": "fotos/Pollyana Cardoso.jpg",
   "SABRINA": "fotos/Sabrina Fortunato de Almeida.jpg",
   "LIDIA GOMES": "fotos/Lidia Gomes.jpg",
-  "ANA CARVALHO": "fotos/download.png",
-  "DIOGO": "fotos/download.png",
 };
 
 function renderRanking(lista) {
