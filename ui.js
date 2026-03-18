@@ -35,7 +35,24 @@ function toggleSidebar() {
 }
 
 function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('open');
+  // Remove o foco do input ativo para esconder teclados e popups de preenchimento automático no celular
+  if (document.activeElement && typeof document.activeElement.blur === 'function') {
+    document.activeElement.blur();
+  }
+  
+  const overlay = document.getElementById('modal-overlay');
+  overlay.classList.remove('open');
+
+  // Transforma a senha em campo oculto na mesma hora para o navegador não reconhecer como "Login"
+  const pwdInputs = document.querySelectorAll('#modal-content input[type="password"]');
+  pwdInputs.forEach(i => i.type = 'hidden');
+  
+  state.activeModal = null;
+
+  // Apaga totalmente o conteúdo do modal após a animação de fechar terminar (300ms)
+  setTimeout(() => {
+    if (!overlay.classList.contains('open')) document.getElementById('modal-content').innerHTML = '';
+  }, 300);
 }
 
 function switchView(v) {
@@ -232,7 +249,7 @@ function renderPendingList(pendParcelas) {
       <span class="pending-produto" title="${esc(p.produto)}">${esc(p.produto)}</span>
       <span class="pending-mes">${mesLabel(p.mes, p.ano)}${vencida ? ' <span class="badge-overdue">Vencida</span>' : ''}</span>
       <span class="pending-val">${fmt(p.valor)}</span>
-      <button class="pending-btn-pg" onclick="marcarPago('${p.descontoId}', ${p.mes}, ${p.ano})">✓ Pagar</button>
+      <button class="pending-btn-pg" onclick="promptPagamento('${p.descontoId}', ${p.mes}, ${p.ano})">✓ Pagar</button>
     </div>`;
   }).join('');
 }
@@ -551,6 +568,7 @@ function parcelaHistoricoHtml(p) {
 }
 
 function openFuncModal(nome) {
+  state.activeModal = { type: 'func', param: nome };
   const descontos = state.descontos.filter(d => d.funcionario === nome);
   let total = 0, pago = 0, pend = 0;
   descontos.forEach(d => { const c = calcDesconto(d); total += c.total; pago += c.pago; pend += c.pendente; });
@@ -592,7 +610,7 @@ function openFuncModal(nome) {
                 label = fmt(p.valor) + (vencida ? ' <span class="badge-overdue">Vencida</span>' : '');
               }
               return `
-              <div class="modal-parcela ${cls}" onclick="toggleParcela('${d.id}', ${p.mes}, ${p.ano})" title="Clique para registrar pagamento">
+              <div class="modal-parcela ${cls}" onclick="promptPagamento('${d.id}', ${p.mes}, ${p.ano})" title="Clique para registrar pagamento">
                 <div>${icon} ${mesLabel(p.mes, p.ano)} · ${label}</div>
                 ${parcelaHistoricoHtml(p)}
               </div>`;
@@ -608,6 +626,7 @@ function openFuncModal(nome) {
 }
 
 function openDescontoModal(id) {
+  state.activeModal = { type: 'desc', param: id };
   const d = state.descontos.find(x => x.id === id);
   if (!d) return;
   const c = calcDesconto(d);
@@ -640,7 +659,7 @@ function openDescontoModal(id) {
           valorText = fmt(p.valor);
         }
         return `
-        <div class="modal-parcela ${cls}" onclick="toggleParcela('${d.id}', ${p.mes}, ${p.ano})" style="flex-direction:column;padding:8px 12px;align-items:flex-start">
+        <div class="modal-parcela ${cls}" onclick="promptPagamento('${d.id}', ${p.mes}, ${p.ano})" style="flex-direction:column;padding:8px 12px;align-items:flex-start">
           <div style="display:flex;justify-content:space-between;width:100%">
             <span>${mesLabel(p.mes, p.ano)}</span>
             <span>${valorText}</span>

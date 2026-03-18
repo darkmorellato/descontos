@@ -9,6 +9,7 @@ let state = {
   monthFilter: '',
   editingId: null,
   registrosLimit: 50,
+  activeModal: null, // Guarda a tela anterior para voltar após o pagamento parcial
 };
 
 const STORAGE_KEY = 'miplace_descontos_v2';
@@ -385,74 +386,188 @@ function editDesconto(id) {
   showToast('Registro carregado para edição', 'success');
 }
 
-// ── MARCAR PAGO ───────────────────────────────────────────
-function marcarPago(descontoId, mes, ano) {
-  const d = state.descontos.find(x => x.id === descontoId);
-  if (!d) return;
-  const p = d.parcelas.find(p => p.mes === mes && p.ano === ano);
-  if (p) {
-    p.pago = true;
-    p.valorPago = p.valor;
-    if (!p.historico) p.historico = [];
-    p.historico.push({ data: today(), valor: p.valor });
-    p.dataPagamento = today();
-    persist();
-    syncItem(d);
-    renderAll();
-    showToast(`Parcela ${mesLabel(mes, ano)} marcada como paga!`, 'success');
-  }
-}
-
-function toggleParcela(descontoId, mes, ano) {
-  const d = state.descontos.find(x => x.id === descontoId);
-  if (!d) return;
-  const p = d.parcelas.find(p => p.mes === mes && p.ano === ano);
-  if (p) {
-    p.pago = !p.pago;
-    if (!p.pago) { delete p.valorPago; delete p.historico; delete p.dataPagamento; }
-    persist();
-    syncItem(d);
-    renderAll();
-    const modal = document.getElementById('modal-content');
-    if (document.getElementById('modal-overlay').classList.contains('open')) {
-      if (modal.querySelector('.modal-func-name')) openFuncModal(d.funcionario);
-      else openDescontoModal(descontoId);
-    }
-    showToast(p.pago ? 'Marcado como pago' : 'Marcado como pendente', 'success');
-  }
-}
-
-// ── 2. HISTORICO + 6. DATA DE PAGAMENTO ───────────────────
-function doConfirmPagamento(descontoId, mes, ano) {
-  const inp = document.getElementById('confirm-valor-pago');
-  const novoPagamento = inp ? parseFloat(inp.value) : NaN;
-  if (isNaN(novoPagamento) || novoPagamento <= 0) { showToast('Informe um valor válido', 'error'); return; }
-
+// ── PAGAMENTO (TOTAL OU PARCIAL) ──────────────────────────
+function promptPagamento(descontoId, mes, ano) {
   const d = state.descontos.find(x => x.id === descontoId);
   const p = d?.parcelas.find(p => p.mes === mes && p.ano === ano);
   if (!p) return;
 
-  const atualCents = toCents(getParcPago(p));
-  const novoPgtoCents = toCents(novoPagamento);
-  const novoTotalCents = atualCents + novoPgtoCents;
+  if (p.pago && !p.valorPago) {
+    promptResetParcela(descontoId, mes, ano);
+    return;
+  }
 
-  p.valorPago = fromCents(novoTotalCents);
-  p.pago = novoTotalCents >= toCents(p.valor);
-
-  if (!p.historico) p.historico = [];
-  p.historico.push({ data: today(), valor: fromCents(novoPgtoCents) });
-  if (p.pago) p.dataPagamento = today();
-
-  closeModal();
-  persist();
-  syncItem(d);
-  renderAll();
+  const jaPago = getParcPago(p);
+  const restante = p.valor - jaPago;
 
   if (p.pago) {
-    showToast(`Parcela quitada! Total recebido: ${fmt(p.valorPago)}`, 'success');
+     promptResetParcela(descontoId, mes, ano);
+     return;
+  }
+
+  const content = `
+    <div class="modal-func-name" style="color:var(--green)">Registrar Pagamento</div>
+    <div style="margin-bottom:20px;color:var(--text2);font-size:13px;">
+      Produto: <strong>${esc(d.produto)}</strong><br>
+      Parcela: <strong>${mesLabel(mes, ano)}</strong><br>
+      Total: <strong>${fmt(p.valor)}</strong> ${jaPago > 0 ? `(Já recebido: ${fmt(jaPago)})` : ''}
+    </div>
+    <div class="form-group" style="margin-bottom:16px;">
+      <label>Valor Recebido (R$)</label>
+      <input type="number" id="confirm-valor-pago" class="text-input" step="0.01" value="${restante.toFixed(2)}" autofocus>
+      <div style="font-size:11px;color:var(--text3);margin-top:6px;">Insira o valor pago. Ele abaterá do restante da parcela.</div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:24px;">
+      ${jaPago > 0 ? `<button type="button" class="btn-secondary" style="margin-right:auto;color:var(--red);border-color:rgba(248,113,113,.3)" onclick="promptResetParcela('${descontoId}', ${mes}, ${ano})">Zerar</button>` : ''}
+      <button type="button" class="btn-secondary" onclick="restoreModalContext()">Cancelar</button>
+      <button type="button" class="btn-primary" style="background:var(--green);box-shadow:0 4px 16px var(--green-glow)" onclick="doConfirmPagamento('${descontoId}', ${mes}, ${ano})">Salvar</button>
+    </div>
+  `;
+
+  document.getElementById('modal-content').innerHTML = content;
+  document.getElementById('modal-overlay').classList.add('open');
+  
+  const input = document.getElementById('confirm-valor-pago');
+  if (input) input.addEventListener('keydown', e => { if (e.key === 'Enter') doConfirmPagamento(descontoId, mes, ano); });
+  setTimeout(() => { if (input) { input.focus(); input.select(); } }, 100);
+}
+
+function restoreModalContext() {
+  if (state.activeModal) {
+    if (state.activeModal.type === 'func') openFuncModal(state.activeModal.param);
+    else if (state.activeModal.type === 'desc') openDescontoModal(state.activeModal.param);
   } else {
-    const restante = p.valor - p.valorPago;
-    showToast(`${fmt(novoPagamento)} registrado · Restante: ${fmt(restante)}`, 'success');
+    closeModal();
+  }
+}
+
+// ── DESFAZER PAGAMENTO (SENHA) ─────────────────────────────
+function promptResetParcela(descontoId, mes, ano) {
+  const content = `
+    <div class="modal-func-name" style="color:var(--red)">Desfazer Pagamento</div>
+    <div style="margin-bottom:20px;color:var(--text2);font-size:13px;">Tem certeza que deseja desfazer os pagamentos desta parcela e marcá-la como PENDENTE? Esta ação exige senha de administrador.</div>
+    <div class="form-group" style="margin-bottom:16px;">
+      <label>Senha do Administrador</label>
+      <div style="position: relative;">
+        <input type="password" id="reset-pwd-input" class="text-input" placeholder="Digite a senha..." autocomplete="new-password" autofocus style="width: 100%; padding-right: 36px;">
+        <button type="button" id="reset-toggle-pwd" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: var(--text3); padding: 4px; display: flex; align-items: center;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <div id="reset-pwd-error" style="color:var(--red);font-size:11px;margin-top:4px;"></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
+      <button type="button" class="btn-secondary" onclick="restoreModalContext()">Cancelar</button>
+      <button type="button" class="btn-primary" style="background:var(--red);box-shadow:0 4px 16px var(--red-glow)" onclick="confirmResetWithPwd('${descontoId}', ${mes}, ${ano})">Desfazer</button>
+    </div>
+  `;
+  document.getElementById('modal-content').innerHTML = content;
+  document.getElementById('modal-overlay').classList.add('open');
+  
+  const input = document.getElementById('reset-pwd-input');
+  if (input) {
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') confirmResetWithPwd(descontoId, mes, ano);
+    });
+  }
+  document.getElementById('reset-toggle-pwd')?.addEventListener('click', (e) => togglePwdVisibility('reset-pwd-input', e.currentTarget));
+  setTimeout(() => input?.focus(), 100);
+}
+
+async function confirmResetWithPwd(descontoId, mes, ano) {
+  const input = document.getElementById('reset-pwd-input');
+  if (!input) return;
+  
+  const btn = document.querySelector('#modal-content .btn-primary');
+  if (btn) { btn.textContent = 'Verificando...'; btn.disabled = true; }
+
+  const realPassword = await fbGetAdminPassword();
+  const inputHash = await gerarHash(input.value);
+
+  if (!realPassword || inputHash !== realPassword) {
+    document.getElementById('reset-pwd-error').textContent = 'Senha incorreta.';
+    input.focus();
+    if (btn) { btn.textContent = 'Desfazer'; btn.disabled = false; }
+    return;
+  }
+  
+  doResetParcela(descontoId, mes, ano);
+}
+
+// ── 2. HISTORICO + 6. DATA DE PAGAMENTO ───────────────────
+function doConfirmPagamento(descontoId, mes, ano) {
+  try {
+    const inp = document.getElementById('confirm-valor-pago');
+    
+    // Previne falha caso o teclado do celular ou PC injete vírgula em vez de ponto
+    const valStr = inp ? inp.value.replace(',', '.') : '';
+    const novoPagamento = parseFloat(valStr);
+    
+    if (isNaN(novoPagamento) || novoPagamento <= 0) { showToast('Informe um valor válido', 'error'); return; }
+
+    // Chama a nova tela visual de confirmação ao invés do alerta nativo do navegador
+    promptConfirmarPagamento(descontoId, mes, ano, novoPagamento);
+  } catch (err) {
+    console.error("Erro interno ao salvar pagamento:", err);
+    alert("Ops! Um erro impediu o salvamento: " + err.message);
+  }
+}
+
+function promptConfirmarPagamento(descontoId, mes, ano, valor) {
+  const d = state.descontos.find(x => x.id === descontoId);
+  const p = d?.parcelas.find(p => p.mes === mes && p.ano === ano);
+  if (!p) return;
+
+  const content = `
+    <div class="modal-func-name" style="color:var(--accent)">Confirmar Pagamento</div>
+    <div style="margin-bottom:20px;color:var(--text2);font-size:14px;line-height:1.5;">
+      Deseja realmente registrar este pagamento no valor de <strong style="color:var(--green);font-size:16px;">${fmt(valor)}</strong> para o produto <strong>${esc(d.produto)}</strong>?
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:24px;">
+      <button type="button" class="btn-secondary" onclick="promptPagamento('${descontoId}', ${mes}, ${ano})">Voltar</button>
+      <button type="button" id="btn-confirmar-pgto" class="btn-primary" style="background:var(--green);box-shadow:0 4px 16px var(--green-glow)" onclick="finalizePagamento('${descontoId}', ${mes}, ${ano}, ${valor})">Confirmar</button>
+    </div>
+  `;
+  document.getElementById('modal-content').innerHTML = content;
+  
+  // Foca no botão automaticamente para permitir que a tecla 'Enter' confirme rápido
+  setTimeout(() => document.getElementById('btn-confirmar-pgto')?.focus(), 100);
+}
+
+function finalizePagamento(descontoId, mes, ano, novoPagamento) {
+  try {
+    const d = state.descontos.find(x => x.id === descontoId);
+    const p = d?.parcelas.find(p => p.mes === mes && p.ano === ano);
+    if (!p) return;
+
+    const atualCents = toCents(getParcPago(p));
+    const novoPgtoCents = toCents(novoPagamento);
+    const novoTotalCents = atualCents + novoPgtoCents;
+
+    p.valorPago = fromCents(novoTotalCents);
+    p.pago = novoTotalCents >= toCents(p.valor);
+
+    if (!p.historico) p.historico = [];
+    
+    const dataHoje = new Date().toLocaleDateString('pt-BR');
+    p.historico.push({ data: dataHoje, valor: fromCents(novoPgtoCents) });
+    if (p.pago) p.dataPagamento = dataHoje;
+
+    persist();
+    syncItem(d);
+    renderAll();
+
+    restoreModalContext();
+
+    if (p.pago) {
+      showToast(`Parcela quitada! Total recebido: ${fmt(p.valorPago)}`, 'success');
+    } else {
+      const restante = p.valor - p.valorPago;
+      showToast(`${fmt(novoPagamento)} registrado · Restante: ${fmt(restante)}`, 'success');
+    }
+  } catch (err) {
+    console.error("Erro interno ao finalizar pagamento:", err);
+    alert("Ops! Um erro impediu o salvamento: " + err.message);
   }
 }
 
@@ -464,10 +579,10 @@ function doResetParcela(descontoId, mes, ano) {
   delete p.valorPago;
   delete p.historico;
   delete p.dataPagamento;
-  closeModal();
   persist();
   syncItem(d);
   renderAll();
+  restoreModalContext();
   showToast('Pagamento zerado — parcela marcada como pendente', 'success');
 }
 
@@ -478,12 +593,12 @@ function deleteDesconto(id) {
     <div style="margin-bottom:20px;color:var(--text2);font-size:13px;">Tem certeza que deseja excluir permanentemente este desconto? Esta ação exige senha de administrador.</div>
     <div class="form-group" style="margin-bottom:16px;">
       <label>Senha do Administrador</label>
-      <input type="password" id="delete-pwd-input" class="text-input" placeholder="Digite a senha..." autofocus>
+      <input type="password" id="delete-pwd-input" class="text-input" placeholder="Digite a senha..." autocomplete="new-password" autofocus>
       <div id="delete-pwd-error" style="color:var(--red);font-size:11px;margin-top:4px;"></div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
-      <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
-      <button class="btn-primary" style="background:var(--red);box-shadow:0 4px 16px var(--red-glow)" onclick="confirmDeleteWithPwd('${id}')">Excluir</button>
+      <button type="button" class="btn-secondary" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn-primary" style="background:var(--red);box-shadow:0 4px 16px var(--red-glow)" onclick="confirmDeleteWithPwd('${id}')">Excluir</button>
     </div>
   `;
   document.getElementById('modal-content').innerHTML = content;
