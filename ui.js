@@ -34,6 +34,21 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
 }
 
+function openConfirmModal(title, message, onConfirm) {
+  state._confirmCallback = onConfirm;
+  const content = `
+    <div class="modal-func-name" style="color:var(--accent)">${esc(title)}</div>
+    <div style="margin-bottom:20px;color:var(--text2);font-size:13px;">${esc(message)}</div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
+      <button class="btn-secondary" data-action="close-modal">Cancelar</button>
+      <button class="btn-primary" data-action="run-confirm">Confirmar</button>
+    </div>
+  `;
+  document.getElementById('modal-content').innerHTML = content;
+  document.getElementById('modal-overlay').classList.add('open');
+  setTimeout(() => document.querySelector('#modal-content .btn-primary')?.focus(), 100);
+}
+
 function closeModal() {
   // Remove o foco do input ativo para esconder teclados no celular
   if (document.activeElement && typeof document.activeElement.blur === 'function') {
@@ -43,6 +58,7 @@ function closeModal() {
   const overlay = document.getElementById('modal-overlay');
   overlay.classList.remove('open');
   state.activeModal = null;
+  state._confirmCallback = null;
 
   // Limpa o conteúdo imediatamente (antes do browser processar os campos de senha),
   // evitando que o autofill do browser preencha outros campos da página com o e-mail.
@@ -51,8 +67,12 @@ function closeModal() {
 
 function switchView(v) {
   if (state.editingId && v !== 'novo') {
-    if (!confirm('Você está editando um registro. Deseja descartar as alterações e sair?')) return;
-    clearForm();
+    openConfirmModal(
+      'Descartar Edição',
+      'Você está editando um registro. Deseja descartar as alterações e continuar?',
+      () => { clearForm(); switchView(v); }
+    );
+    return;
   }
   state.view = v;
   document.getElementById('sidebar').classList.remove('open');
@@ -66,6 +86,13 @@ function switchView(v) {
     novo: state.editingId ? 'Editar Desconto' : 'Novo Desconto'
   };
   document.getElementById('page-title').textContent = titles[v] || v;
+
+  // #3: restaurar filtros de registros ao voltar para a view
+  if (v === 'registros') {
+    const s = document.getElementById('search-reg'); if (s) s.value = state.registrosFiltro.search;
+    const f = document.getElementById('filter-func'); if (f) f.value = state.registrosFiltro.func;
+    const p = document.getElementById('filter-pg');   if (p) p.value = state.registrosFiltro.pg;
+  }
 
   if (v === 'dashboard')     renderDashboard();
   if (v === 'funcionarios')  renderFuncionarios();
@@ -409,6 +436,10 @@ function applyRegistrosSort(lista) {
 function buildRegistroTable(lista) {
   if (!lista.length) return '';
   const thStyle = 'cursor:pointer;user-select:none';
+
+  let sumValor = 0, sumPago = 0, sumPend = 0;
+  lista.forEach(d => { const c = calcDesconto(d); sumValor += d.valor; sumPago += c.pago; sumPend += c.pendente; });
+
   return `
     <div class="table-wrapper">
       <table class="data-table">
@@ -426,6 +457,16 @@ function buildRegistroTable(lista) {
           </tr>
         </thead>
         <tbody>${lista.map(buildRegistroRow).join('')}</tbody>
+        <tfoot>
+          <tr style="font-weight:600;border-top:2px solid var(--gb-strong);background:var(--bg2)">
+            <td colspan="3" style="padding:8px 12px;font-size:12px;color:var(--text2)">${lista.length} registro${lista.length !== 1 ? 's' : ''}</td>
+            <td class="td-val">${fmt(sumValor)}</td>
+            <td></td>
+            <td class="td-pago">${fmt(sumPago)}</td>
+            <td class="td-pend">${fmt(sumPend)}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tfoot>
       </table>
     </div>`;
 }
@@ -434,6 +475,10 @@ function renderRegistros() {
   const search = (document.getElementById('search-reg')?.value || '').toLowerCase();
   const funcF  = document.getElementById('filter-func')?.value  || '';
   const pgF    = document.getElementById('filter-pg')?.value    || '';
+
+  // #2: mostrar botão limpar apenas quando há filtro ativo
+  const clearBtn = document.getElementById('clear-reg-filters-btn');
+  if (clearBtn) clearBtn.style.display = (search || funcF || pgF) ? 'inline-flex' : 'none';
 
   const lista = state.descontos.filter(d => {
     const matchText = d.produto.toLowerCase().includes(search) || d.funcionario.toLowerCase().includes(search);

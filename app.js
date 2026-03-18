@@ -10,7 +10,9 @@ let state = {
   editingId: null,
   registrosLimit: 50,
   activeModal: null,       // Guarda a tela anterior para voltar após o pagamento parcial
-  registrosSort: { col: null, dir: 'asc' }, // #6: ordenação da tabela de registros
+  registrosSort:  { col: null, dir: 'asc' }, // ordenação da tabela de registros
+  registrosFiltro: { search: '', func: '', pg: '' }, // filtros persistidos ao trocar de view
+  _confirmCallback: null,  // callback do modal de confirmação customizado
 };
 
 const STORAGE_KEY = 'miplace_descontos_v2';
@@ -113,9 +115,23 @@ function addEventListeners() {
   // Filtros de view
   document.getElementById('search-func')?.addEventListener('input', renderFuncionariosDebounced);
   document.getElementById('filter-status')?.addEventListener('change', renderFuncionarios);
-  document.getElementById('search-reg')?.addEventListener('input', () => { state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' }; renderRegistrosDebounced(); });
-  document.getElementById('filter-func')?.addEventListener('change', () => { state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' }; renderRegistros(); });
-  document.getElementById('filter-pg')?.addEventListener('change', () => { state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' }; renderRegistros(); });
+  document.getElementById('search-reg')?.addEventListener('input', () => {
+    state.registrosFiltro.search = document.getElementById('search-reg').value;
+    state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' };
+    renderRegistrosDebounced();
+  });
+  document.getElementById('filter-func')?.addEventListener('change', () => {
+    state.registrosFiltro.func = document.getElementById('filter-func').value;
+    state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' };
+    renderRegistros();
+  });
+  document.getElementById('filter-pg')?.addEventListener('change', () => {
+    state.registrosFiltro.pg = document.getElementById('filter-pg').value;
+    state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' };
+    renderRegistros();
+  });
+  document.getElementById('clear-reg-filters-btn')?.addEventListener('click', clearRegistrosFilters);
+  document.getElementById('export-csv-btn')?.addEventListener('click', exportCSV);
   document.getElementById('extrato-func-select')?.addEventListener('change', renderExtrato);
   document.getElementById('print-extrato-btn')?.addEventListener('click', () => window.print());
 
@@ -164,6 +180,12 @@ function addEventListeners() {
       case 'finalizar-pagamento':  finalizePagamento(id, m, y, v); break;
       case 'prompt-pagamento':     promptPagamento(id, m, y); break;
       case 'prompt-reset-parcela': promptResetParcela(id, m, y); break;
+      case 'run-confirm': {
+        closeModal();
+        const cb = state._confirmCallback; state._confirmCallback = null;
+        if (cb) cb();
+        break;
+      }
     }
   });
 
@@ -709,6 +731,17 @@ async function confirmDeleteWithPwd(id) {
   showToast('Registro excluído', 'success');
 }
 
+// ── LIMPAR FILTROS ────────────────────────────────────────
+function clearRegistrosFilters() {
+  state.registrosFiltro = { search: '', func: '', pg: '' };
+  state.registrosLimit = 50;
+  state.registrosSort  = { col: null, dir: 'asc' };
+  const s = document.getElementById('search-reg'); if (s) s.value = '';
+  const f = document.getElementById('filter-func'); if (f) f.value = '';
+  const p = document.getElementById('filter-pg');   if (p) p.value = '';
+  renderRegistros();
+}
+
 // ── EXPORT JSON ───────────────────────────────────────────
 function exportData() {
   const json = JSON.stringify({ exportedAt: new Date().toISOString(), descontos: state.descontos }, null, 2);
@@ -720,6 +753,34 @@ function exportData() {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   showToast('JSON exportado com sucesso!', 'success');
+}
+
+// ── EXPORT CSV ────────────────────────────────────────────
+function exportCSV() {
+  const headers = ['Funcionário','Produto','Qtd','Valor Total','Forma Pagamento','Total Pago','Pendente','Status','Observações'];
+  const rows = state.descontos.map(d => {
+    const c = calcDesconto(d);
+    const status = c.pendente === 0 ? 'Quitado' : c.pago > 0 ? 'Parcial' : 'Pendente';
+    return [
+      d.funcionario, d.produto, d.qtd,
+      d.valor.toFixed(2).replace('.', ','),
+      d.pagamento,
+      c.pago.toFixed(2).replace('.', ','),
+      c.pendente.toFixed(2).replace('.', ','),
+      status,
+      d.obs || ''
+    ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(';');
+  });
+  // BOM (\uFEFF) garante que o Excel abre com encoding correto
+  const csv  = '\uFEFF' + [headers.map(h => `"${h}"`).join(';'), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `miplace_descontos_${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast('CSV exportado com sucesso!', 'success');
 }
 
 // ── 4. IMPORT JSON ────────────────────────────────────────

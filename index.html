@@ -116,6 +116,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v12M7 10l5 5 5-5M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2"/></svg>
           Exportar JSON
         </button>
+        <button id="export-csv-btn" class="btn-export" style="background:rgba(22,163,74,.08);border-color:rgba(22,163,74,.3);color:var(--green)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
+          Exportar CSV
+        </button>
         <input type="file" id="import-file-input" accept=".json" style="display:none">
       </div>
     </header>
@@ -199,6 +203,7 @@
             <option value="INTEGRAL">Integral</option>
             <option value="PARCELADO">Parcelado</option>
           </select>
+          <button id="clear-reg-filters-btn" class="btn-secondary" style="display:none;white-space:nowrap">✕ Limpar filtros</button>
         </div>
 
         <div id="registros-container"></div>
