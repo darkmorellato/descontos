@@ -35,27 +35,25 @@ function toggleSidebar() {
 }
 
 function closeModal() {
-  // Remove o foco do input ativo para esconder teclados e popups de preenchimento automático no celular
+  // Remove o foco do input ativo para esconder teclados no celular
   if (document.activeElement && typeof document.activeElement.blur === 'function') {
     document.activeElement.blur();
   }
-  
+
   const overlay = document.getElementById('modal-overlay');
   overlay.classList.remove('open');
-
-  // Transforma a senha em campo oculto na mesma hora para o navegador não reconhecer como "Login"
-  const pwdInputs = document.querySelectorAll('#modal-content input[type="password"]');
-  pwdInputs.forEach(i => i.type = 'hidden');
-  
   state.activeModal = null;
 
-  // Apaga totalmente o conteúdo do modal após a animação de fechar terminar (300ms)
-  setTimeout(() => {
-    if (!overlay.classList.contains('open')) document.getElementById('modal-content').innerHTML = '';
-  }, 300);
+  // Limpa o conteúdo imediatamente (antes do browser processar os campos de senha),
+  // evitando que o autofill do browser preencha outros campos da página com o e-mail.
+  document.getElementById('modal-content').innerHTML = '';
 }
 
 function switchView(v) {
+  if (state.editingId && v !== 'novo') {
+    if (!confirm('Você está editando um registro. Deseja descartar as alterações e sair?')) return;
+    clearForm();
+  }
   state.view = v;
   document.getElementById('sidebar').classList.remove('open');
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
@@ -82,9 +80,9 @@ function applyMonthFilter() {
 }
 
 function renderAll() {
+  clearCalcCache(); // limpa cache de calcDesconto antes de cada ciclo
   renderMonthFilter();
-  populateFuncSelects();
-  renderDashboard();
+  if (state.view === 'dashboard')    renderDashboard();
   if (state.view === 'funcionarios') renderFuncionarios();
   if (state.view === 'registros')    renderRegistros();
   if (state.view === 'extrato')      renderExtrato();
@@ -177,8 +175,8 @@ function renderRanking(lista) {
   el.innerHTML = sorted.slice(0, 8).map(([nome, val], i) => {
     const initials = nome.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
     const photoUrl = FUNC_PHOTOS[nome];
-    const avatarContent = photoUrl 
-      ? `<img src="${photoUrl}" alt="${esc(nome)}">` 
+    const avatarContent = photoUrl
+      ? `<img src="${photoUrl}" alt="${esc(nome)}" onerror="this.style.display='none'">`
       : esc(initials);
 
     return `
@@ -245,7 +243,7 @@ function renderPendingList(pendParcelas) {
       <span class="pending-produto" title="${esc(p.produto)}">${esc(p.produto)}</span>
       <span class="pending-mes">${mesLabel(p.mes, p.ano)}${vencida ? ' <span class="badge-overdue">Vencida</span>' : ''}</span>
       <span class="pending-val">${fmt(p.valor)}</span>
-      <button class="pending-btn-pg" onclick="promptPagamento('${p.descontoId}', ${p.mes}, ${p.ano})">✓ Pagar</button>
+      <button class="pending-btn-pg" data-action="prompt-pagamento" data-id="${p.descontoId}" data-mes="${p.mes}" data-ano="${p.ano}">✓ Pagar</button>
     </div>`;
   }).join('');
 }
@@ -257,8 +255,8 @@ function buildFuncCard([nome, descontos, stats]) {
   const initials = nome.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
 
   const photoUrl = FUNC_PHOTOS[nome];
-  const avatarContent = photoUrl 
-    ? `<img src="${photoUrl}" alt="${esc(nome)}">` 
+  const avatarContent = photoUrl
+    ? `<img src="${photoUrl}" alt="${esc(nome)}" onerror="this.style.display='none'">`
     : esc(initials);
 
   return `
@@ -379,15 +377,52 @@ function buildRegistroRow(d) {
     </tr>`;
 }
 
+function sortIndicator(col) {
+  if (state.registrosSort.col !== col) return ' <span style="opacity:.3;font-size:.75em">⇅</span>';
+  return state.registrosSort.dir === 'asc' ? ' <span style="font-size:.75em">↑</span>' : ' <span style="font-size:.75em">↓</span>';
+}
+
+function applyRegistrosSort(lista) {
+  const { col, dir } = state.registrosSort;
+  if (!col) return lista;
+  return [...lista].sort((a, b) => {
+    let va, vb;
+    switch (col) {
+      case 'funcionario': va = a.funcionario;              vb = b.funcionario;              break;
+      case 'produto':     va = a.produto;                  vb = b.produto;                  break;
+      case 'qtd':         va = a.qtd;                      vb = b.qtd;                      break;
+      case 'valor':       va = a.valor;                    vb = b.valor;                    break;
+      case 'pago':        va = calcDesconto(a).pago;       vb = calcDesconto(b).pago;       break;
+      case 'pendente':    va = calcDesconto(a).pendente;   vb = calcDesconto(b).pendente;   break;
+      case 'status': {
+        const r = d => { const c = calcDesconto(d); return c.pendente === 0 ? 0 : c.pago > 0 ? 1 : 2; };
+        va = r(a); vb = r(b); break;
+      }
+      default: return 0;
+    }
+    if (va < vb) return dir === 'asc' ? -1 : 1;
+    if (va > vb) return dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+}
+
 function buildRegistroTable(lista) {
   if (!lista.length) return '';
+  const thStyle = 'cursor:pointer;user-select:none';
   return `
     <div class="table-wrapper">
       <table class="data-table">
         <thead>
           <tr>
-            <th>Funcionário</th><th>Produto</th><th>Qtd</th><th>Valor</th>
-            <th>Pagamento</th><th>Pago</th><th>Pendente</th><th>Status</th><th>Ações</th>
+            <th data-sort="funcionario" style="${thStyle}">Funcionário${sortIndicator('funcionario')}</th>
+            <th data-sort="produto"     style="${thStyle}">Produto${sortIndicator('produto')}</th>
+            <th data-sort="qtd"         style="${thStyle}">Qtd${sortIndicator('qtd')}</th>
+            <th data-sort="valor"       style="${thStyle}">Valor${sortIndicator('valor')}</th>
+            <th>Pagamento</th>
+            <th data-sort="pago"        style="${thStyle}">Pago${sortIndicator('pago')}</th>
+            <th data-sort="pendente"    style="${thStyle}">Pendente${sortIndicator('pendente')}</th>
+            <th data-sort="status"      style="${thStyle}">Status${sortIndicator('status')}</th>
+            <th>Ações</th>
           </tr>
         </thead>
         <tbody>${lista.map(buildRegistroRow).join('')}</tbody>
@@ -414,8 +449,9 @@ function renderRegistros() {
     return;
   }
 
-  const abertos    = lista.filter(d => calcDesconto(d).pendente > 0);
-  const concluidos = lista.filter(d => calcDesconto(d).pendente === 0);
+  const sorted     = applyRegistrosSort(lista);
+  const abertos    = sorted.filter(d => calcDesconto(d).pendente > 0);
+  const concluidos = sorted.filter(d => calcDesconto(d).pendente === 0);
 
   // Otimização: Paginação Virtual para evitar travamentos de tela com milhares de nós no DOM
   const limit = state.registrosLimit || 50;
@@ -606,7 +642,7 @@ function openFuncModal(nome) {
                 label = fmt(p.valor) + (vencida ? ' <span class="badge-overdue">Vencida</span>' : '');
               }
               return `
-              <div class="modal-parcela ${cls}" onclick="promptPagamento('${d.id}', ${p.mes}, ${p.ano})" title="Clique para registrar pagamento">
+              <div class="modal-parcela ${cls}" data-action="prompt-pagamento" data-id="${d.id}" data-mes="${p.mes}" data-ano="${p.ano}" title="Clique para registrar pagamento">
                 <div>${icon} ${mesLabel(p.mes, p.ano)} · ${label}</div>
                 ${parcelaHistoricoHtml(p)}
               </div>`;
@@ -655,7 +691,7 @@ function openDescontoModal(id) {
           valorText = fmt(p.valor);
         }
         return `
-        <div class="modal-parcela ${cls}" onclick="promptPagamento('${d.id}', ${p.mes}, ${p.ano})" style="flex-direction:column;padding:8px 12px;align-items:flex-start">
+        <div class="modal-parcela ${cls}" data-action="prompt-pagamento" data-id="${d.id}" data-mes="${p.mes}" data-ano="${p.ano}" style="flex-direction:column;padding:8px 12px;align-items:flex-start">
           <div style="display:flex;justify-content:space-between;width:100%">
             <span>${mesLabel(p.mes, p.ano)}</span>
             <span>${valorText}</span>
@@ -733,7 +769,7 @@ function renderExtrato() {
       }
     });
   });
-  timeline.sort((a, b) => b.data.localeCompare(a.data));
+  timeline.sort((a, b) => parseDataBR(b.data) - parseDataBR(a.data));
 
   // HTML dos descontos
   const descontosHtml = descontos.map(d => {

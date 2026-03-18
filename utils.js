@@ -21,7 +21,6 @@ function updateDOM(id, html) {
 }
 
 async function gerarHash(message) {
-  if (typeof sha256 !== 'undefined') return sha256(message);
   const msgBuffer = new TextEncoder().encode(message);
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -74,11 +73,18 @@ function isVencida(p) {
 
 function getParcPago(p) { return p.valorPago ?? (p.pago ? p.valor : 0); }
 
+// Cache por ciclo de render — limpar antes de cada renderAll()
+const _calcCache = new Map();
+function clearCalcCache() { _calcCache.clear(); }
+
 function calcDesconto(d) {
+  if (_calcCache.has(d.id)) return _calcCache.get(d.id);
   const total    = d.valor;
   const pago     = fromCents(d.parcelas.reduce((s, p) => s + toCents(getParcPago(p)), 0));
   const pendente = fromCents(d.parcelas.reduce((s, p) => s + Math.max(0, toCents(p.valor) - toCents(getParcPago(p))), 0));
-  return { total, pago, pendente };
+  const result   = { total, pago, pendente };
+  _calcCache.set(d.id, result);
+  return result;
 }
 
 function getDescontosFiltrados() {
@@ -87,7 +93,14 @@ function getDescontosFiltrados() {
   return state.descontos.filter(d => d.parcelas.some(p => p.mes === m && p.ano === y));
 }
 
-function genId() { return 'd' + Date.now() + Math.random().toString(36).slice(2, 6); }
+function genId() { return crypto.randomUUID(); }
+
+// Converte data no formato DD/MM/YYYY para timestamp ordenável
+function parseDataBR(str) {
+  if (!str) return 0;
+  const [d, m, y] = str.split('/');
+  return new Date(+y, +m - 1, +d).getTime();
+}
 
 function getFuncionarios() {
   const map = {};

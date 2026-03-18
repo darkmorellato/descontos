@@ -2,30 +2,6 @@
 // DATA.JS — Dados importados do ACESSORIOS_2025.xlsx + modelo
 // ============================================================
 
-// Mapeamento de colunas mensais (col index → {mes, ano})
-const MONTH_MAP = {
-  5:  { mes: 11, ano: 2025, label: 'Nov/25' },
-  7:  { mes: 12, ano: 2025, label: 'Dez/25' },
-  9:  { mes:  1, ano: 2026, label: 'Jan/26' },
-  11: { mes:  2, ano: 2026, label: 'Fev/26' },
-  13: { mes:  3, ano: 2026, label: 'Mar/26' },
-  15: { mes:  4, ano: 2026, label: 'Abr/26' },
-  17: { mes:  5, ano: 2026, label: 'Mai/26' },
-  19: { mes:  6, ano: 2026, label: 'Jun/26' },
-  21: { mes:  7, ano: 2026, label: 'Jul/26' },
-  23: { mes:  8, ano: 2026, label: 'Ago/26' },
-  25: { mes:  9, ano: 2026, label: 'Set/26' },
-  27: { mes: 10, ano: 2026, label: 'Out/26' },
-  29: { mes: 11, ano: 2026, label: 'Nov/26' },
-  31: { mes: 12, ano: 2026, label: 'Dez/26' },
-  33: { mes:  1, ano: 2027, label: 'Jan/27' },
-  35: { mes:  2, ano: 2027, label: 'Fev/27' },
-  37: { mes:  3, ano: 2027, label: 'Mar/27' },
-  39: { mes:  4, ano: 2027, label: 'Abr/27' },
-  41: { mes:  5, ano: 2027, label: 'Mai/27' },
-  43: { mes:  6, ano: 2027, label: 'Jun/27' },
-};
-
 // Dados importados e normalizados da planilha
 // Cada desconto tem: id, funcionario, produto, qtd, valor, pagamento, parcelas[], obs
 const INITIAL_DATA = [

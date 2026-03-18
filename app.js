@@ -9,12 +9,28 @@ let state = {
   monthFilter: '',
   editingId: null,
   registrosLimit: 50,
-  activeModal: null, // Guarda a tela anterior para voltar após o pagamento parcial
+  activeModal: null,       // Guarda a tela anterior para voltar após o pagamento parcial
+  registrosSort: { col: null, dir: 'asc' }, // #6: ordenação da tabela de registros
 };
 
 const STORAGE_KEY = 'miplace_descontos_v2';
 const DRAFT_KEY   = 'miplace_form_draft';
 const SAFE_INITIAL_DATA = typeof INITIAL_DATA !== 'undefined' ? INITIAL_DATA : [];
+
+let unsubscribeFbListener = null; // #9: cancelar listener ao fazer logout
+let pendingSync = false;          // #13: sinaliza sync pendente offline
+
+// #7: filtra registros com estrutura inválida para evitar crashes na renderização
+function sanitizeDescontos(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(d =>
+    d && typeof d.id === 'string' &&
+    typeof d.funcionario === 'string' &&
+    typeof d.produto === 'string' &&
+    typeof d.valor === 'number' &&
+    Array.isArray(d.parcelas)
+  );
+}
 
 // ── INIT ───────────────────────────────────────────────────
 async function init() {
@@ -23,12 +39,12 @@ async function init() {
   try {
     const firestoreData = await fbLoad();
     if (firestoreData !== null) {
-      state.descontos = firestoreData;
+      state.descontos = sanitizeDescontos(firestoreData);
       lsSet(state.descontos);
     } else {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        try { state.descontos = JSON.parse(saved); }
+        try { state.descontos = sanitizeDescontos(JSON.parse(saved)); }
         catch { state.descontos = [...SAFE_INITIAL_DATA]; }
       } else {
         state.descontos = [...SAFE_INITIAL_DATA];
@@ -37,9 +53,10 @@ async function init() {
     }
     showSyncStatus('ok');
 
-    fbListen(descontos => {
-      state.descontos = descontos;
-      lsSet(descontos);
+    unsubscribeFbListener = fbListen(descontos => {
+      state.descontos = sanitizeDescontos(descontos);
+      lsSet(state.descontos);
+      populateFuncSelects();
       renderAll();
       showSyncStatus('ok');
     });
@@ -52,7 +69,7 @@ async function init() {
     showSyncStatus('offline');
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
-      try { state.descontos = JSON.parse(saved); }
+      try { state.descontos = sanitizeDescontos(JSON.parse(saved)); }
       catch { state.descontos = [...SAFE_INITIAL_DATA]; }
     } else {
       state.descontos = [...SAFE_INITIAL_DATA];
@@ -60,6 +77,7 @@ async function init() {
   }
 
   addEventListeners();
+  populateFuncSelects();
 
   const now = new Date();
   const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -95,9 +113,9 @@ function addEventListeners() {
   // Filtros de view
   document.getElementById('search-func')?.addEventListener('input', renderFuncionariosDebounced);
   document.getElementById('filter-status')?.addEventListener('change', renderFuncionarios);
-  document.getElementById('search-reg')?.addEventListener('input', () => { state.registrosLimit = 50; renderRegistrosDebounced(); });
-  document.getElementById('filter-func')?.addEventListener('change', () => { state.registrosLimit = 50; renderRegistros(); });
-  document.getElementById('filter-pg')?.addEventListener('change', () => { state.registrosLimit = 50; renderRegistros(); });
+  document.getElementById('search-reg')?.addEventListener('input', () => { state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' }; renderRegistrosDebounced(); });
+  document.getElementById('filter-func')?.addEventListener('change', () => { state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' }; renderRegistros(); });
+  document.getElementById('filter-pg')?.addEventListener('change', () => { state.registrosLimit = 50; state.registrosSort = { col: null, dir: 'asc' }; renderRegistros(); });
   document.getElementById('extrato-func-select')?.addEventListener('change', renderExtrato);
   document.getElementById('print-extrato-btn')?.addEventListener('click', () => window.print());
 
@@ -118,13 +136,60 @@ function addEventListeners() {
       el.addEventListener('change', saveDraft);
     });
 
-  // Modal
+  // Modal + tecla Escape
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.getElementById('modal-overlay')?.classList.contains('open')) {
+      closeModal();
+    }
+  });
   document.getElementById('modal-overlay')?.addEventListener('click', closeModal);
   document.getElementById('modal-container')?.addEventListener('click', e => e.stopPropagation());
   document.getElementById('modal-close-btn')?.addEventListener('click', closeModal);
 
+  // #3: event delegation centralizado para botões dentro do modal
+  document.getElementById('modal-content')?.addEventListener('click', e => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const { action, id, mes, ano, valor } = el.dataset;
+    const m = mes   ? +mes   : undefined;
+    const y = ano   ? +ano   : undefined;
+    const v = valor ? +valor : undefined;
+    switch (action) {
+      case 'close-modal':          closeModal(); break;
+      case 'restore-modal':        restoreModalContext(); break;
+      case 'confirm-edit-pwd':     confirmEditWithPwd(id); break;
+      case 'confirm-delete-pwd':   confirmDeleteWithPwd(id); break;
+      case 'confirm-reset-pwd':    confirmResetWithPwd(id, m, y); break;
+      case 'do-confirm-pagamento': doConfirmPagamento(id, m, y); break;
+      case 'finalizar-pagamento':  finalizePagamento(id, m, y, v); break;
+      case 'prompt-pagamento':     promptPagamento(id, m, y); break;
+      case 'prompt-reset-parcela': promptResetParcela(id, m, y); break;
+    }
+  });
+
+  // #3: event delegation para lista de pendências
+  document.getElementById('pending-list')?.addEventListener('click', e => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const { action, id, mes, ano } = btn.dataset;
+    if (action === 'prompt-pagamento') promptPagamento(id, +mes, +ano);
+  });
+
   // Delegação de eventos (já estava bom, mas centralizando aqui)
   document.getElementById('registros-container')?.addEventListener('click', e => {
+    // #6: ordenar ao clicar no cabeçalho da coluna
+    const th = e.target.closest('th[data-sort]');
+    if (th) {
+      const col = th.dataset.sort;
+      if (state.registrosSort.col === col) {
+        state.registrosSort.dir = state.registrosSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.registrosSort.col = col;
+        state.registrosSort.dir = 'asc';
+      }
+      renderRegistros();
+      return;
+    }
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
     const action = btn.dataset.action;
@@ -169,6 +234,12 @@ function saveDesconto() {
     let valParaEssaParcela = parcelaCents;
     if (i === numParcelas - 1) valParaEssaParcela += restoCents;
     parcelas.push({ mes, ano, label: mesLabel(mes, ano), valor: fromCents(valParaEssaParcela), pago: false });
+  }
+
+  const somaParcelas = fromCents(parcelas.reduce((s, p) => s + toCents(p.valor), 0));
+  if (Math.abs(somaParcelas - valor) > 0.02) {
+    showToast(`Soma das parcelas (${fmt(somaParcelas)}) diverge do valor total (${fmt(valor)})`, 'error');
+    return;
   }
 
   if (state.editingId) {
@@ -225,21 +296,26 @@ function persist() {
 
 async function syncItem(desconto) {
   showSyncStatus('saving');
-  try { await fbSaveItem(desconto); showSyncStatus('ok'); }
-  catch (err) { console.error('Erro no Firebase:', err); showSyncStatus('offline'); }
+  try { await fbSaveItem(desconto); showSyncStatus('ok'); pendingSync = false; }
+  catch (err) { console.error('Erro no Firebase:', err); showSyncStatus('offline'); pendingSync = true; }
 }
 
 async function syncDelete(id) {
   showSyncStatus('saving');
-  try { await fbDeleteItem(id); showSyncStatus('ok'); }
-  catch (err) { console.error('Erro no Firebase:', err); showSyncStatus('offline'); }
+  try { await fbDeleteItem(id); showSyncStatus('ok'); pendingSync = false; }
+  catch (err) { console.error('Erro no Firebase:', err); showSyncStatus('offline'); pendingSync = true; }
 }
 
 async function syncAll() {
   showSyncStatus('saving');
-  try { await fbSaveAll(state.descontos); showSyncStatus('ok'); }
-  catch (err) { console.error('Erro no Firebase:', err); showSyncStatus('offline'); }
+  try { await fbSaveAll(state.descontos); showSyncStatus('ok'); pendingSync = false; }
+  catch (err) { console.error('Erro no Firebase:', err); showSyncStatus('offline'); pendingSync = true; }
 }
+
+// #13: reenviar ao reconectar
+window.addEventListener('online', () => {
+  if (pendingSync) { syncAll(); }
+});
 
 // ── RASCUNHO DO FORMULÁRIO ────────────────────────────────
 function saveDraft() {
@@ -292,12 +368,12 @@ function promptEditDesconto(id) {
     <div style="margin-bottom:20px;color:var(--text2);font-size:13px;">Para editar este registro, insira a senha de administrador.</div>
     <div class="form-group" style="margin-bottom:16px;">
       <label>Senha do Administrador</label>
-      <input type="password" id="edit-pwd-input" class="text-input" placeholder="Digite a senha..." autofocus>
+      <input type="password" id="edit-pwd-input" class="text-input" placeholder="Digite a senha..." autocomplete="new-password" autofocus>
       <div id="edit-pwd-error" style="color:var(--red);font-size:11px;margin-top:4px;"></div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
-      <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
-      <button class="btn-primary" onclick="confirmEditWithPwd('${id}')">Acessar</button>
+      <button class="btn-secondary" data-action="close-modal">Cancelar</button>
+      <button class="btn-primary" data-action="confirm-edit-pwd" data-id="${id}">Acessar</button>
     </div>
   `;
   document.getElementById('modal-content').innerHTML = content;
@@ -413,9 +489,9 @@ function promptPagamento(descontoId, mes, ano) {
       <div style="font-size:11px;color:var(--text3);margin-top:6px;">Insira o valor pago. Ele abaterá do restante da parcela.</div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:24px;">
-      ${jaPago > 0 ? `<button type="button" class="btn-secondary" style="margin-right:auto;color:var(--red);border-color:rgba(248,113,113,.3)" onclick="promptResetParcela('${descontoId}', ${mes}, ${ano})">Zerar</button>` : ''}
-      <button type="button" class="btn-secondary" onclick="restoreModalContext()">Cancelar</button>
-      <button type="button" class="btn-primary" style="background:var(--green);box-shadow:0 4px 16px var(--green-glow)" onclick="doConfirmPagamento('${descontoId}', ${mes}, ${ano})">Salvar</button>
+      ${jaPago > 0 ? `<button type="button" class="btn-secondary" style="margin-right:auto;color:var(--red);border-color:rgba(248,113,113,.3)" data-action="prompt-reset-parcela" data-id="${descontoId}" data-mes="${mes}" data-ano="${ano}">Zerar</button>` : ''}
+      <button type="button" class="btn-secondary" data-action="restore-modal">Cancelar</button>
+      <button type="button" class="btn-primary" style="background:var(--green);box-shadow:0 4px 16px var(--green-glow)" data-action="do-confirm-pagamento" data-id="${descontoId}" data-mes="${mes}" data-ano="${ano}">Salvar</button>
     </div>
   `;
 
@@ -452,8 +528,8 @@ function promptResetParcela(descontoId, mes, ano) {
       <div id="reset-pwd-error" style="color:var(--red);font-size:11px;margin-top:4px;"></div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
-      <button type="button" class="btn-secondary" onclick="restoreModalContext()">Cancelar</button>
-      <button type="button" class="btn-primary" style="background:var(--red);box-shadow:0 4px 16px var(--red-glow)" onclick="confirmResetWithPwd('${descontoId}', ${mes}, ${ano})">Desfazer</button>
+      <button type="button" class="btn-secondary" data-action="restore-modal">Cancelar</button>
+      <button type="button" class="btn-primary" style="background:var(--red);box-shadow:0 4px 16px var(--red-glow)" data-action="confirm-reset-pwd" data-id="${descontoId}" data-mes="${mes}" data-ano="${ano}">Desfazer</button>
     </div>
   `;
   document.getElementById('modal-content').innerHTML = content;
@@ -519,8 +595,8 @@ function promptConfirmarPagamento(descontoId, mes, ano, valor) {
       Deseja realmente registrar este pagamento no valor de <strong style="color:var(--green);font-size:16px;">${fmt(valor)}</strong> para o produto <strong>${esc(d.produto)}</strong>?
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:24px;">
-      <button type="button" class="btn-secondary" onclick="promptPagamento('${descontoId}', ${mes}, ${ano})">Voltar</button>
-      <button type="button" id="btn-confirmar-pgto" class="btn-primary" style="background:var(--green);box-shadow:0 4px 16px var(--green-glow)" onclick="finalizePagamento('${descontoId}', ${mes}, ${ano}, ${valor})">Confirmar</button>
+      <button type="button" class="btn-secondary" data-action="prompt-pagamento" data-id="${descontoId}" data-mes="${mes}" data-ano="${ano}">Voltar</button>
+      <button type="button" id="btn-confirmar-pgto" class="btn-primary" style="background:var(--green);box-shadow:0 4px 16px var(--green-glow)" data-action="finalizar-pagamento" data-id="${descontoId}" data-mes="${mes}" data-ano="${ano}" data-valor="${valor}">Confirmar</button>
     </div>
   `;
   document.getElementById('modal-content').innerHTML = content;
@@ -592,8 +668,8 @@ function deleteDesconto(id) {
       <div id="delete-pwd-error" style="color:var(--red);font-size:11px;margin-top:4px;"></div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
-      <button type="button" class="btn-secondary" onclick="closeModal()">Cancelar</button>
-      <button type="button" class="btn-primary" style="background:var(--red);box-shadow:0 4px 16px var(--red-glow)" onclick="confirmDeleteWithPwd('${id}')">Excluir</button>
+      <button type="button" class="btn-secondary" data-action="close-modal">Cancelar</button>
+      <button type="button" class="btn-primary" style="background:var(--red);box-shadow:0 4px 16px var(--red-glow)" data-action="confirm-delete-pwd" data-id="${id}">Excluir</button>
     </div>
   `;
   document.getElementById('modal-content').innerHTML = content;
@@ -642,7 +718,7 @@ function exportData() {
   a.href = url;
   a.download = `miplace_descontos_${new Date().toISOString().split('T')[0]}.json`;
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
   showToast('JSON exportado com sucesso!', 'success');
 }
 
@@ -658,8 +734,10 @@ function handleImport(e) {
   reader.onload = ev => {
     try {
       const parsed = JSON.parse(ev.target.result);
-      const descontos = Array.isArray(parsed) ? parsed : (parsed.descontos || null);
-      if (!Array.isArray(descontos)) throw new Error('formato inválido');
+      const raw = Array.isArray(parsed) ? parsed : (parsed.descontos || null);
+      if (!Array.isArray(raw)) throw new Error('formato inválido');
+      const descontos = sanitizeDescontos(raw);
+      if (!descontos.length) throw new Error('nenhum registro válido encontrado');
       
       // Proteção de Cota do Firebase: Interrompe importações excessivas acidentais
       if (descontos.length > 500) {
@@ -670,6 +748,7 @@ function handleImport(e) {
       }
 
       state.descontos = descontos;
+      state.registrosLimit = 50;
       persist();
       syncAll();
       populateFuncSelects();
@@ -753,8 +832,21 @@ async function handleLogin(e) {
 }
 
 async function handleLogout() {
+  if (unsubscribeFbListener) { unsubscribeFbListener(); unsubscribeFbListener = null; }
+  appInitialized = false;
   await auth.signOut();
 }
+
+// #14: aviso ao sair com formulário preenchido
+function formHasUnsavedData() {
+  if (state.editingId || state.view !== 'novo') return false;
+  const produto = document.getElementById('form-produto')?.value.trim();
+  const valor   = document.getElementById('form-valor')?.dataset.raw;
+  return !!(produto || valor);
+}
+window.addEventListener('beforeunload', e => {
+  if (formHasUnsavedData()) { e.preventDefault(); }
+});
 
 // ── THEME (DARK MODE) ─────────────────────────────────────
 function initTheme() {
